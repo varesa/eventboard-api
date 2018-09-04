@@ -1,0 +1,248 @@
+apiVersion: v1
+
+kind: Template
+metadata: 
+  name: ${APP_NAME}-template
+
+parameters:
+- description: Openshift namespace
+  name: NAMESPACE
+- description: Application name (short)
+  name: APP_NAME
+- description: Git branch
+  name: GIT_BRANCH
+- description: Git URL
+  name: GIT_URL
+- description: Database password
+  from: '[a-zA-Z0-9]{12}'
+  generate: expression
+  name: DATABASE_PASSWORD
+
+objects:
+
+#######################
+# Postgresql database #
+#######################
+
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}-postgresql
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      app: ${APP_NAME}-${GIT_BRANCH}
+      deploymentconfig: ${APP_NAME}-${GIT_BRANCH}-postgresql
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: ${APP_NAME}-${GIT_BRANCH}
+          deploymentconfig: ${APP_NAME}-${GIT_BRANCH}-postgresql
+      spec:
+        containers:
+        - env:
+          - name: POSTGRESQL_USER
+            value: test
+          - name: POSTGRESQL_DATABASE
+            value: test
+          - name: POSTGRESQL_PASSWORD
+            value: ${DATABASE_PASSWORD}
+          image: docker.io/centos/postgresql-96-centos7@sha256:02cecc6d8594d0239479aec57f759013a48cbe6a26ddf89d1003b3b40127b5d6
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 5432
+            timeoutSeconds: 1
+          name: ${APP_NAME}-${GIT_BRANCH}-postgresql
+          ports:
+          - containerPort: 5432
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 5432
+            timeoutSeconds: 1
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${APP_NAME}-${GIT_BRANCH}-postgresql
+        from:
+          kind: ImageStreamTag
+          name: postgresql:9.6
+          namespace: openshift
+      type: ImageChange
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}-postgresql
+  spec:
+    ports:
+    - name: 5432-tcp
+      port: 5432
+      protocol: TCP
+      targetPort: 5432
+    selector:
+      app: ${APP_NAME}-${GIT_BRANCH}
+      deploymentconfig: ${APP_NAME}-${GIT_BRANCH}-postgresql
+    sessionAffinity: None
+    type: ClusterIP
+
+####################
+# Main application #
+####################
+
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      app: ${APP_NAME}-${GIT_BRANCH}
+      deploymentconfig: ${APP_NAME}-${GIT_BRANCH}
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: ${APP_NAME}-${GIT_BRANCH}
+          deploymentconfig: ${APP_NAME}-${GIT_BRANCH}
+      spec:
+        containers:
+        - image: docker-registry.default.svc:5000/${NAMESPACE}/${APP_NAME}-${GIT_BRANCH}:latest
+          imagePullPolicy: Always
+          name: ${APP_NAME}-${GIT_BRANCH}
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+      - imageChangeParams:
+          containerNames:
+            - ${APP_NAME}-${GIT_BRANCH}
+          from:
+            kind: ImageStreamTag
+            name: "${APP_NAME}-${GIT_BRANCH}:latest"
+            namespace: ${NAMESPACE}
+        type: ImageChange
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}
+  spec:
+    ports:
+    - port: 8000
+      protocol: TCP
+      targetPort: 8000
+    selector:
+      app: ${APP_NAME}-${GIT_BRANCH}
+      deploymentconfig: ${APP_NAME}-${GIT_BRANCH}
+    sessionAffinity: None
+    type: ClusterIP
+
+- apiVersion: v1
+  kind: Route
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}
+  spec:
+    to:
+      kind: Service
+      name: ${APP_NAME}-${GIT_BRANCH}
+      weight: 100
+    wildcardPolicy: None
+
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}
+  spec:
+    failedBuildsHistoryLimit: 5
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APP_NAME}-${GIT_BRANCH}:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      git:
+        ref: ${GIT_BRANCH}
+        uri: ${GIT_REPO}
+      sourceSecret:
+        name: gitlab-ssh
+      type: Git
+    strategy:
+      dockerStrategy:
+        from:
+          kind: ImageStreamTag
+          name: python:3
+      type: Docker
+    successfulBuildsHistoryLimit: 5
+
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: ${APP_NAME}-${GIT_BRANCH}
+    name: ${APP_NAME}-${GIT_BRANCH}
+  spec:
+    lookupPolicy:
+      local: false
