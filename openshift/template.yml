@@ -11,10 +11,10 @@ parameters:
   name: APP_NAME
 - description: Git branch
   name: GIT_BRANCH
-- description: Git URL
-  name: GIT_URL
+- description: Git repository URL
+  name: GIT_REPO
 - description: Database password
-  from: '[a-zA-Z0-9]{12}'
+  from: '[a-zA-Z0-9]{16}'
   generate: expression
   name: DATABASE_PASSWORD
 
@@ -41,8 +41,8 @@ objects:
       resources: {}
       rollingParams:
         intervalSeconds: 1
-        maxSurge: 25%
-        maxUnavailable: 25%
+        maxSurge: 0%
+        maxUnavailable: 100%
         timeoutSeconds: 600
         updatePeriodSeconds: 1
       type: Rolling
@@ -55,9 +55,9 @@ objects:
         containers:
         - env:
           - name: POSTGRESQL_USER
-            value: test
+            value: dbuser
           - name: POSTGRESQL_DATABASE
-            value: test
+            value: appdb
           - name: POSTGRESQL_PASSWORD
             value: ${DATABASE_PASSWORD}
           image: docker.io/centos/postgresql-96-centos7@sha256:02cecc6d8594d0239479aec57f759013a48cbe6a26ddf89d1003b3b40127b5d6
@@ -160,6 +160,9 @@ objects:
           resources: {}
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+          env:
+              - name: DATABASE_URI
+                value: "postgres://dbuser:${DATABASE_PASSWORD}@${APP_NAME}-${GIT_BRANCH}-postgresql/appdb"
         dnsPolicy: ClusterFirst
         restartPolicy: Always
         schedulerName: default-scheduler
@@ -175,6 +178,7 @@ objects:
             name: "${APP_NAME}-${GIT_BRANCH}:latest"
             namespace: ${NAMESPACE}
         type: ImageChange
+      - type: ConfigChange
 
 - apiVersion: v1
   kind: Service
@@ -184,9 +188,9 @@ objects:
     name: ${APP_NAME}-${GIT_BRANCH}
   spec:
     ports:
-    - port: 8000
+    - port: 5000
       protocol: TCP
-      targetPort: 8000
+      targetPort: 5000
     selector:
       app: ${APP_NAME}-${GIT_BRANCH}
       deploymentconfig: ${APP_NAME}-${GIT_BRANCH}
@@ -226,14 +230,13 @@ objects:
       git:
         ref: ${GIT_BRANCH}
         uri: ${GIT_REPO}
-      sourceSecret:
-        name: gitlab-ssh
       type: Git
     strategy:
       dockerStrategy:
         from:
           kind: ImageStreamTag
-          name: python:3
+          name: python3:latest
+          namespace: images
       type: Docker
     successfulBuildsHistoryLimit: 5
 
